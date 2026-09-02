@@ -1,0 +1,54 @@
+name: grab-epg
+
+on:
+  schedule:
+    # Every 6h at :23 (off the top of the hour; GHA cron jitters anyway).
+    - cron: "23 */6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  grab:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repo (channel list + idmap)
+        uses: actions/checkout@v4
+
+      - name: Checkout iptv-org/epg
+        uses: actions/checkout@v4
+        with:
+          repository: iptv-org/epg
+          path: epg
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install grabber
+        working-directory: epg
+        run: npm install --no-audit --no-fund
+
+      - name: Grab sports EPG
+        working-directory: epg
+        # Triple-dash: npm eats a single "--". maxConnections=5 balances speed vs
+        # source-site bans (beIN/Sky block aggressive parallel scraping).
+        run: npm run grab --- --channels=../sports.channels.xml --days=2 --maxConnections=5 --output=guides/sports.xml
+
+      - name: Rewrite channel ids to playlist ids + gzip
+        run: node .github/scripts/rewrite.mjs epg/guides/sports.xml guides/sports.xml.gz idmap.json
+
+      - name: Sanity check (programmes present)
+        run: |
+          count=$(gunzip -c guides/sports.xml.gz | grep -c '<programme')
+          echo "programmes: $count"
+          if [ "$count" -lt 100 ]; then echo "::error::Too few programmes ($count) - keeping previous guide"; exit 1; fi
+
+      - name: Publish (squash history; data file, history is worthless)
+        run: |
+          git config user.name "epg-bot"
+          git config user.email "epg-bot@users.noreply.github.com"
+          git add guides/sports.xml.gz
+          git commit --amend --no-edit -q || git commit -q -m "epg: refresh"
+          git push -f origin HEAD:main

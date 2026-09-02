@@ -1,0 +1,4 @@
+epg/
+node_modules/
+*.xml
+!sports.channels.xml
